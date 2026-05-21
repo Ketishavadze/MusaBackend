@@ -47,7 +47,7 @@ class Product(models.Model):
     category = models.CharField(max_length=30, choices=Category.choices)
     price = models.DecimalField(max_digits=8, decimal_places=2, validators=[MinValueValidator(Decimal("0.01"))])
     description = models.TextField(blank=True)
-    image_url = models.URLField(blank=True)
+    image_url = models.TextField(blank=True, default="")
     rating = models.DecimalField(max_digits=3, decimal_places=1, default=Decimal("0.0"))
     active = models.BooleanField(default=True)
     created_at = models.DateTimeField(auto_now_add=True)

@@ -113,7 +113,7 @@ class StudioSerializer(serializers.ModelSerializer):
 class ProductSerializer(serializers.ModelSerializer):
     studio = serializers.CharField(source="studio.name", read_only=True)
     studio_id = serializers.IntegerField(source="studio.id", read_only=True)
-    image = serializers.URLField(source="image_url", required=False, allow_blank=True)
+    image = serializers.CharField(source="image_url", required=False, allow_blank=True)
     is_favourite = serializers.SerializerMethodField()
 
     class Meta:
