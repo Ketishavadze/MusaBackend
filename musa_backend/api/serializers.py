@@ -159,6 +159,16 @@ class LoginSerializer(serializers.Serializer):
 
         attrs["user"] = user
         return attrs
+    
+def tokens_for_user(user):
+    refresh = RefreshToken.for_user(user)
+
+    return {
+        "user": UserSerializer(user).data,
+        "access": str(refresh.access_token),
+        "refresh": str(refresh),
+    }
+    
 
 class StudioSerializer(serializers.ModelSerializer):
     owner = serializers.ReadOnlyField(source="owner.id")
