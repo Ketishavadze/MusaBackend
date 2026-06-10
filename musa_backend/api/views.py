@@ -8,6 +8,8 @@ from rest_framework.response import Response
 from rest_framework.views import APIView
 from rest_framework_simplejwt.tokens import RefreshToken
 
+
+
 from .models import CartItem, Favourite, Order, Product, Studio
 from .permissions import IsProductOwnerOrReadOnly
 from .serializers import (
@@ -80,25 +82,32 @@ class StudioMeView(APIView):
         return Response(StudioSerializer(studio).data, status=status.HTTP_201_CREATED)
 
 
+
+
 class ProductViewSet(viewsets.ModelViewSet):
     serializer_class = ProductSerializer
-    permission_classes = [IsProductOwnerOrReadOnly]
 
     def get_permissions(self):
         if self.action in ["list", "retrieve"]:
             return [AllowAny()]
+
         if self.action == "favourite":
             return [IsAuthenticated()]
+
         return [IsAuthenticated(), IsProductOwnerOrReadOnly()]
 
     def get_queryset(self):
         qs = Product.objects.select_related("studio", "studio__owner")
 
-        # Used by My Studio page: /api/products/?mine=true
         mine = self.request.query_params.get("mine")
+
         if mine == "true":
-            if not self.request.user.is_authenticated or not hasattr(self.request.user, "studio"):
+            if (
+                not self.request.user.is_authenticated
+                or not hasattr(self.request.user, "studio")
+            ):
                 return Product.objects.none()
+
             qs = qs.filter(studio=self.request.user.studio)
         else:
             qs = qs.filter(active=True)
@@ -109,36 +118,50 @@ class ProductViewSet(viewsets.ModelViewSet):
 
         search = self.request.query_params.get("search")
         if search:
-            qs = qs.filter(Q(title__icontains=search) | Q(studio__name__icontains=search))
+            qs = qs.filter(
+                Q(title__icontains=search)
+                | Q(studio__name__icontains=search)
+            )
 
-        return qs
+        return qs.order_by("-created_at")
 
     def perform_create(self, serializer):
         studio = getattr(self.request.user, "studio", None)
+
         if not studio:
             raise ValidationError("Register your studio before creating listings.")
+
         serializer.save(studio=studio)
 
     def perform_update(self, serializer):
         product = self.get_object()
+
         if product.studio.owner_id != self.request.user.id and not self.request.user.is_staff:
             raise PermissionDenied("Only the studio owner can edit this listing.")
-        serializer.save()
+
+        serializer.save(studio=product.studio)
 
     def perform_destroy(self, instance):
         if instance.studio.owner_id != self.request.user.id and not self.request.user.is_staff:
             raise PermissionDenied("Only the studio owner can delete this listing.")
+
         instance.delete()
 
     @action(detail=True, methods=["post"], url_path="favourite")
     def favourite(self, request, pk=None):
         product = self.get_object()
-        favourite, created = Favourite.objects.get_or_create(user=request.user, product=product)
+
+        favourite, created = Favourite.objects.get_or_create(
+            user=request.user,
+            product=product,
+        )
+
         if created:
             liked = True
         else:
             favourite.delete()
             liked = False
+
         return Response({"liked": liked})
 
 

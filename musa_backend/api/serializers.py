@@ -4,7 +4,9 @@ from django.contrib.auth import authenticate
 from django.db import transaction
 from rest_framework import serializers
 from rest_framework_simplejwt.tokens import RefreshToken
-
+import re
+from django.contrib.auth.password_validation import validate_password
+from django.core.exceptions import ValidationError as DjangoValidationError
 from .models import CartItem, Favourite, Order, OrderItem, Product, Studio, User
 
 
@@ -43,63 +45,120 @@ class RegisterSerializer(serializers.Serializer):
     name = serializers.CharField(max_length=120)
     username = serializers.CharField(max_length=150, required=False, allow_blank=True)
     email = serializers.EmailField()
-    password = serializers.CharField(write_only=True, min_length=6)
+    password = serializers.CharField(write_only=True, min_length=8)
+
+    def validate_name(self, value):
+        value = value.strip()
+
+        if len(value) < 2:
+            raise serializers.ValidationError("Name must be at least 2 characters.")
+
+        if not re.match(r"^[A-Za-zÀ-ž\s'-]+$", value):
+            raise serializers.ValidationError(
+                "Name can only contain letters, spaces, apostrophes, and hyphens."
+            )
+
+        return value
 
     def validate_email(self, value):
-        value = value.lower()
-        if User.objects.filter(email=value).exists():
+        value = value.strip().lower()
+
+        if User.objects.filter(email__iexact=value).exists():
             raise serializers.ValidationError("This email is already registered.")
+
         return value
 
     def validate_username(self, value):
-        value = (value or "").strip()
-        if value and User.objects.filter(username=value).exists():
+        value = (value or "").strip().lower()
+
+        if not value:
+            return value
+
+        if len(value) < 3:
+            raise serializers.ValidationError("Username must be at least 3 characters.")
+
+        if len(value) > 30:
+            raise serializers.ValidationError("Username must be at most 30 characters.")
+
+        if not re.match(r"^[a-zA-Z0-9_]+$", value):
+            raise serializers.ValidationError(
+                "Username can only contain letters, numbers, and underscores."
+            )
+
+        if User.objects.filter(username__iexact=value).exists():
             raise serializers.ValidationError("This username is already taken.")
+
+        return value
+
+    def validate_password(self, value):
+        if len(value) < 8:
+            raise serializers.ValidationError("Password must be at least 8 characters.")
+
+        if not re.search(r"[A-Za-z]", value):
+            raise serializers.ValidationError("Password must contain at least one letter.")
+
+        if not re.search(r"\d", value):
+            raise serializers.ValidationError("Password must contain at least one number.")
+
+        try:
+            validate_password(value)
+        except DjangoValidationError as e:
+            raise serializers.ValidationError(list(e.messages))
+
         return value
 
     def create(self, validated_data):
         name = validated_data["name"].strip()
+
         base_username = validated_data.get("username") or name.lower().replace(" ", "_")
+        base_username = re.sub(r"[^a-zA-Z0-9_]", "", base_username).lower()
+
+        if not base_username:
+            base_username = "user"
+
         username = base_username
         counter = 1
-        while User.objects.filter(username=username).exists():
+
+        while User.objects.filter(username__iexact=username).exists():
             counter += 1
             username = f"{base_username}_{counter}"
 
         user = User.objects.create_user(
             username=username,
-            email=validated_data["email"],
+            email=validated_data["email"].lower(),
             password=validated_data["password"],
             name=name,
         )
+
         return user
 
 
 class LoginSerializer(serializers.Serializer):
     email = serializers.EmailField()
-    password = serializers.CharField(write_only=True)
+    password = serializers.CharField(write_only=True, trim_whitespace=False)
 
     def validate(self, attrs):
-        email = attrs["email"].lower()
+        email = attrs["email"].strip().lower()
         password = attrs["password"]
-        user = User.objects.filter(email=email).first()
+
+        if not email or not password:
+            raise serializers.ValidationError("Email and password are required.")
+
+        user = User.objects.filter(email__iexact=email).first()
+
         if user is None:
             raise serializers.ValidationError("Invalid email or password.")
+
         user = authenticate(username=user.username, password=password)
+
         if user is None:
             raise serializers.ValidationError("Invalid email or password.")
+
+        if not user.is_active:
+            raise serializers.ValidationError("This account is disabled.")
+
         attrs["user"] = user
         return attrs
-
-
-def tokens_for_user(user):
-    refresh = RefreshToken.for_user(user)
-    return {
-        "user": UserSerializer(user).data,
-        "access": str(refresh.access_token),
-        "refresh": str(refresh),
-    }
-
 
 class StudioSerializer(serializers.ModelSerializer):
     owner = serializers.ReadOnlyField(source="owner.id")
@@ -133,14 +192,46 @@ class ProductSerializer(serializers.ModelSerializer):
             "created_at",
             "updated_at",
         )
-        read_only_fields = ("id", "studio", "studio_id", "rating", "created_at", "updated_at")
+        read_only_fields = (
+            "id",
+            "studio",
+            "studio_id",
+            "rating",
+            "created_at",
+            "updated_at",
+        )
+
+    def validate_title(self, value):
+        value = value.strip()
+        if len(value) < 3:
+            raise serializers.ValidationError("Title must be at least 3 characters.")
+        return value
+
+    def validate_category(self, value):
+        value = value.strip()
+        allowed = ["Crochet", "Jewelry", "Pottery", "Textile", "Mixed Crafts", "Craft"]
+        if value not in allowed:
+            raise serializers.ValidationError("Invalid category.")
+        return value
+
+    def validate_price(self, value):
+        if value <= 0:
+            raise serializers.ValidationError("Price must be greater than 0.")
+        if value > Decimal("10000.00"):
+            raise serializers.ValidationError("Price is too high.")
+        return value
+
+    def validate_description(self, value):
+        value = (value or "").strip()
+        if len(value) > 2000:
+            raise serializers.ValidationError("Description is too long.")
+        return value
 
     def get_is_favourite(self, obj):
         request = self.context.get("request")
         if not request or not request.user.is_authenticated:
             return False
         return Favourite.objects.filter(user=request.user, product=obj).exists()
-
 
 class CartItemSerializer(serializers.ModelSerializer):
     product = ProductSerializer(read_only=True)
